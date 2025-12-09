@@ -1,5 +1,6 @@
 """Module provider for EfficientIP (scaffold)
-
+Connects dns-lexicon to an EfficientIP SOLIDserver using its REST API
+allowing to manage DNS resource records.
 """
 
 import json
@@ -38,6 +39,7 @@ class Provider(BaseProvider):
 			"--auth-password",
 			help="specify API secret for authentication",
 		)
+		# FIXME - Support API Tokens
 		# parser.add_argument(
 		# 	"--auth-id",
 		# 	help="specify username or token ID for authentication",
@@ -115,7 +117,7 @@ class Provider(BaseProvider):
 			"dns_name": self.sds_dns,
 			"rr_type": rtype,
 			"rr_ttl": int(self._get_lexicon_option("ttl") or 300),
-			"rr_name": self._full_name(name),
+			"rr_name": name,
 			"rr_value1": content,
 		}
 		if self.sds_view:
