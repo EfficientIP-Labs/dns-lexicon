@@ -265,16 +265,19 @@ class Provider(BaseProvider):
 	def update_record(self, identifier=None, rtype=None, name=None, content=None):
 		"""Update an existing record"""
 		if content is None:
-			raise Exception("No content provided for update - won't update")
-
+			LOGGER.error("NNo content provided for update - won't update")
+			return False
+		
 		# Find existing records matching rtype and name
 		existing = self.list_records(rtype, name)
 		if not existing:
-			raise Exception("No matching records found matching type and name - won't update")
+			LOGGER.error("No matching records found matching type and name - won't update")
+			return False
 
 		# If multiple records found, avoid guessing which to replace
 		if len(existing) > 1:
-			raise Exception("Multiple records found matching type and name - won't update")
+			LOGGER.error("Multiple records found matching type and name - won't update")
+			return False
 
 		# Delete the found record(s) and create the new one
 		record = existing[0]
