@@ -2,6 +2,8 @@
 
 import json
 import logging
+import re
+import ipaddress
 from argparse import ArgumentParser
 from typing import List, Optional
 
@@ -15,11 +17,16 @@ LOGGER = logging.getLogger(__name__)
 
 _NAMESERVER_DOMAINS = []
 
+# Simple FQDN/hostname validator (allows optional trailing dot)
+_FQDN_REGEXP = re.compile(
+	r"^(?=.{1,253}$)(?!-)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.?$"
+)
+
 class Provider(BaseProvider):
 	"""Provider class for EfficientIP SOLIDserver"""
 
-	# Supported resource record types for this provider
-	SUPPORTED_RRTYPES = ["A", "AAAA", "CNAME", "TXT", "SRV"]
+	# Supported record types for EfficientIP REST operations (SRV not supported)
+	SUPPORTED_RRTYPES = ["A", "AAAA", "CNAME", "TXT"]
 
 	@staticmethod
 	def get_nameservers() -> List[str]:
@@ -139,7 +146,20 @@ class Provider(BaseProvider):
 		pass
 
 	def create_record(self, rtype, name, content):
-		"""Create a DNS record"""
+		"""Create a DNS record
+
+		Validate record type against supported types; unsupported types
+		are logged and the method returns False to indicate no action.
+		"""
+		# Validate rtype
+		if rtype not in self.SUPPORTED_RRTYPES:
+			LOGGER.error("Unsupported record type '%s' for EfficientIP provider", rtype)
+			return False
+
+		# Validate content according to rtype
+		if not self._validate_content(rtype, content):
+			# _validate_content logs the specific error
+			return False
 
 		LOGGER.debug(f"domain: {self.domain}")
 		#UNABLE to retrieve non altered domain name ... # LOGGER.debug(f"orignal domain name: {self.config.resolve("lexicon:domain")}")
@@ -284,6 +304,42 @@ class Provider(BaseProvider):
 					record_name = f"{record_name}.{self.domain}"
 			# return the FQDN without trailing dots
 			return f"{record_name}"
+
+	def _validate_content(self, rtype: str, content: str) -> bool:
+		"""Validate `content` according to `rtype`.
+
+		Returns True if valid, False otherwise (and logs an error).
+		"""
+		if content is None:
+			LOGGER.error("No content provided for record type %s", rtype)
+			return False
+
+		try:
+			if rtype == "A":
+				ipaddress.IPv4Address(content)
+				return True
+			if rtype == "AAAA":
+				ipaddress.IPv6Address(content)
+				return True
+			if rtype == "CNAME":
+				# CNAME target must be a valid FQDN/hostname
+				if not _FQDN_REGEXP.match(content):
+					LOGGER.error("Invalid CNAME target '%s' (not a valid FQDN)", content)
+					return False
+				return True
+			if rtype == "TXT":
+				# Any string is acceptable for TXT — ensure it's not empty
+				if content == "":
+					LOGGER.error("TXT record content must not be empty")
+					return False
+				return True
+			# SRV records are not supported by this provider implementation
+			# default: unknown type — already filtered earlier, but be safe
+			LOGGER.error("Unhandled record type for validation: %s", rtype)
+			return False
+		except Exception as err:
+			LOGGER.error("Error validating content for %s: %s", rtype, err)
+			return False
 
 	def _request(self, action: str = "GET", url: str = "/", data=None, query_params=None):
 		if query_params is None:
