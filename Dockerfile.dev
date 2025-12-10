@@ -1,6 +1,6 @@
 # Dockerfile.uv — development image that installs uv and sets up environment
-# Build: 'docker build -t lexicon-uv-dev -f Dockerfile.uv .' to run
-# Run: 'docker run --rm -it -v $(pwd):/work -w /work lexicon-uv-dev /bin/bash'
+# Build: 'docker build -t lexicon-dev -f Dockerfile.dev .' to run
+# Run: 'docker run --rm -it -v $(pwd):/work -w /work lexicon-dev /bin/bash'
 # Use: 'lexicon efficientip --no-verify-ssl --auth-username <usr> --auth-password <pwd> --sds-host <host> --sds-dns <dns_name> list test.priv A'
 # Debug: add '--log-level DEBUG' at the end of the command above to see uv/lexicon debug logs
 FROM python:3.12-slim
