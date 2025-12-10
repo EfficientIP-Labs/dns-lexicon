@@ -1,7 +1,4 @@
-"""Module provider for EfficientIP (scaffold)
-Connects dns-lexicon to an EfficientIP SOLIDserver using its REST API
-allowing to manage DNS resource records.
-"""
+"""Module provider for EfficientIP SOLIDserver"""
 
 import json
 import logging
@@ -77,7 +74,9 @@ class Provider(BaseProvider):
 		self.sds_host = self._get_provider_option("sds_host")
 
 	def authenticate(self):
-		"""Authenticate against EfficientIP SOLIDserver using basic auth.
+		"""
+		Authenticate against EfficientIP SOLIDserver using basic auth.
+		Validate that the specified dns server is either a smart or a standalone DNS server.
 
 		Requires `--auth-username`, `--auth-password` and `--sds-host`.
 		Also reads `--sds-dns` and optional `--sds-view` which are used
@@ -102,10 +101,8 @@ class Provider(BaseProvider):
 		# Verify that the provided sds_dns corresponds to a smart or
 		# standalone DNS server (vdns_parent_id == 0). Query the
 		# `/rest/dns_server_list` endpoint for this purpose.
-		def _esc(val: str) -> str:
-			return val.replace("'", "\\'")
 
-		where = f"dns_name='{_esc(self.sds_dns)}'"
+		where = f"dns_name='{self.sds_dns}'"
 		params = {"WHERE": where, "SELECT": "dns_name,vdns_parent_id"}
 		endpoint = "/rest/dns_server_list"
 		payload = self._get(endpoint, params)
@@ -159,11 +156,15 @@ class Provider(BaseProvider):
 
 		endpoint = "/rest/dns_rr_add"
 		payload = self._post(endpoint, params)
-		LOGGER.debug("create_record payload: %s", payload)
-		return True
+
+		if payload:
+			return True
+		
+		return False
 
 	def list_records(self, rtype=None, name=None, content=None):
-		"""List DNS records.
+		"""
+		List DNS records.
 
 		EfficientIP's `dns_rr_list` expects a single `WHERE` parameter
 		containing URL-encoded filter expressions and supports a `SELECT`
@@ -251,8 +252,7 @@ class Provider(BaseProvider):
 		return self.create_record(rtype or record.get("type"), name or record.get("name"), content)
 
 	def delete_record(self, identifier=None, rtype=None, name=None, content=None):
-		# EfficientIP expects the same parameters as add but calls
-		# `/rest/dns_rr_delete` with URL encoded parameters.
+		"""Delete an existing record"""
 		params = {
 			"dns_name": self.sds_dns,
 			"rr_type": rtype,
@@ -266,8 +266,11 @@ class Provider(BaseProvider):
 
 		endpoint = "/rest/dns_rr_delete"
 		payload = self._delete(endpoint, params)
-		LOGGER.debug("delete_record payload: %s", payload)
-		return True
+
+		if payload:
+			return True
+		
+		return False
 
 	# Helpers
 	def _fqdn_name(self, record_name):
@@ -302,15 +305,25 @@ class Provider(BaseProvider):
 
 		# EfficientIP expects URL encoded query parameters for these REST
 		# endpoints. Use `params` to send them in the query string.
-		response = requests.request(action, full_url, params=query_params, auth=auth, verify=verify)
-		response.raise_for_status()
+		try:
+			response = requests.request(action, full_url, params=query_params, auth=auth, verify=verify)
+			response.raise_for_status()
+		except requests.exceptions.HTTPError as err:
+			# If the server returned a 400, report invalid parameters clearly.
+			resp = getattr(err, "response", None)
+			if resp is not None and getattr(resp, "status_code", None) == 400:
+				body = resp.text
+				LOGGER.error("Invalid parameters (400) provider response: %s", body)
+				return None
+			# Re-raise other HTTP errors
+			raise
+
 		# Try to parse JSON, fall back to an empty structure
 		try:
 			return response.json()
 		except ValueError:
-			# some EfficientIP endpoints might return plain text; return
-			# the raw text so callers can inspect if needed
-			return response.text
+			LOGGER.error("Invalid response: %s", response.text)
+			return None
 
 	def _get(self, url, params=None):
 		return self._request("GET", url, None, params)
