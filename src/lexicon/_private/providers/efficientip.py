@@ -18,6 +18,9 @@ _NAMESERVER_DOMAINS = []
 class Provider(BaseProvider):
 	"""Provider class for EfficientIP SOLIDserver"""
 
+	# Supported resource record types for this provider
+	SUPPORTED_RRTYPES = ["A", "AAAA", "CNAME", "TXT", "SRV"]
+
 	@staticmethod
 	def get_nameservers() -> List[str]:
 		return _NAMESERVER_DOMAINS
@@ -210,7 +213,7 @@ class Provider(BaseProvider):
 		endpoint = "/rest/dns_rr_list"
 
 		# Fetch raw records from provider
-		raw_records = self._get(endpoint, params)
+		raw_records = self._get(endpoint, params) or []
 
 		# Transform provider response into lexicon canonical record form
 		records = []
