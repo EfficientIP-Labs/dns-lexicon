@@ -239,19 +239,26 @@ class Provider(BaseProvider):
 		records = []
 
 		for record in raw_records:
-			id_val = record.get("rr_id")
-			rtype_val = record.get("rr_type")
-			name_val = record.get("rr_full_name")
-			ttl_val = record.get("ttl")
+			# Extract values once
+			rr_type = record.get("rr_type")
 			content_val = record.get("value1")
-			processed = {
-				"id": id_val,
-				"type": rtype_val,
-				"name": name_val,
-				"ttl": ttl_val,
-				"content": content_val,
-			}
-			records.append(processed)
+
+			# Normalize AAAA values to compressed IPv6 representation when possible
+			if rr_type == "AAAA" and content_val:
+				try:
+					content_val = ipaddress.IPv6Address(content_val).compressed
+				except ipaddress.AddressValueError:
+					LOGGER.debug("Could not parse IPv6 address: %s", content_val)
+
+			records.append(
+				{
+					"id": record.get("rr_id"),
+					"type": rr_type,
+					"name": record.get("rr_full_name"),
+					"ttl": record.get("ttl"),
+					"content": content_val,
+				}
+			)
 
 		return records
 
