@@ -96,8 +96,40 @@ class Provider(BaseProvider):
 		if not self.sds_dns:
 			raise AuthenticationError("`sds_dns` is required (the DNS server name)")
 
-		# store credentials for requests
+		# Store credentials for requests
 		self._auth = (username, password)
+
+		# Verify that the provided sds_dns corresponds to a smart or
+		# standalone DNS server (vdns_parent_id == 0). Query the
+		# `/rest/dns_server_list` endpoint for this purpose.
+		def _esc(val: str) -> str:
+			return val.replace("'", "\\'")
+
+		where = f"dns_name='{_esc(self.sds_dns)}'"
+		params = {"WHERE": where, "SELECT": "dns_name,vdns_parent_id"}
+		endpoint = "/rest/dns_server_list"
+		payload = self._get(endpoint, params)
+
+		raw = []
+		if isinstance(payload, dict):
+			raw = payload.get("data") or payload.get("result") or payload.get("dns_server") or []
+		elif isinstance(payload, list):
+			raw = payload
+
+		if not raw:
+			raise AuthenticationError(f"No managed DNS server found ({self.sds_dns})")
+
+		server = raw[0]
+		vdns_parent = server.get("vdns_parent_id")
+		try:
+			vdns_parent_int = int(vdns_parent)
+		except Exception:
+			vdns_parent_int = 0
+
+		if vdns_parent_int != 0:
+			raise AuthenticationError(
+				"Provided DNS server is not a smart nor a standalone DNS server; you must interact with the smart or a standalone dns server."
+			)
 
 		# domain_id is not used by EfficientIP in the same way as other
 		# providers, keep domain for compatibility with base class
@@ -107,24 +139,26 @@ class Provider(BaseProvider):
 		pass
 
 	def create_record(self, rtype, name, content):
-		"""Create a DNS record.
+		"""Create a DNS record"""
 
-		Replace the endpoint and payload structure with EfficientIP's API
-		specifics.
-		"""
+		LOGGER.debug(f"domain: {self.domain}")
+		#UNABLE to retrieve non altered domain name ... # LOGGER.debug(f"orignal domain name: {self.config.resolve("lexicon:domain")}")
+		LOGGER.debug(f"sanitized name: {self._fqdn_name(name) if name else 'N/A'}")
+
 		# Build query parameters expected by EfficientIP SOLIDserver REST API
 		params = {
 			"dns_name": self.sds_dns,
 			"rr_type": rtype,
 			"rr_ttl": int(self._get_lexicon_option("ttl") or 300),
-			"rr_name": name,
+			"rr_name": self._fqdn_name(name),
 			"rr_value1": content,
 		}
+
 		if self.sds_view:
 			params["dns_view_name"] = self.sds_view
 
 		endpoint = "/rest/dns_rr_add"
-		payload = self._get(endpoint, params)
+		payload = self._post(endpoint, params)
 		LOGGER.debug("create_record payload: %s", payload)
 		return True
 
@@ -135,37 +169,34 @@ class Provider(BaseProvider):
 		containing URL-encoded filter expressions and supports a `SELECT`
 		parameter to limit returned fields. Build `WHERE` from the
 		available arguments and include `SELECT` with the requested
-		fields: `rr_full_name, rr_type, value1, ttl`.
+		fields: `rr_id, rr_full_name, rr_type, value1, ttl`.
 		"""
+
+		LOGGER.debug(f"domain: {self.domain}")
+		#UNABLE to retrieve non altered domain name ... # LOGGER.debug(f"orignal domain name: {self.config.resolve("lexicon:domain")}")
+		LOGGER.debug(f"sanitized name: {self._fqdn_name(name) if name else 'N/A'}")
 
 		# Build WHERE filter parts
 		where_parts = []
-		# helper to escape single quotes inside quoted literals
-		def _esc(val: str) -> str:
-			return val.replace("'", "\\'")
-
 		# mandatory dns server identifier (quoted)
-		dns_name_val = _esc(self.sds_dns)
-		where_parts.append(f"dns_name='{dns_name_val}'")
+		where_parts.append(f"dns_name='{self.sds_dns}'")
 
 		if self.sds_view:
-			view_val = _esc(self.sds_view)
-			where_parts.append(f"dns_view_name='{view_val}'")
+			where_parts.append(f"dns_view_name='{self.sds_view}'")
 
 		if rtype:
-			rtype_val = _esc(rtype)
-			where_parts.append(f"rr_type='{rtype_val}'")
+			where_parts.append(f"rr_type='{rtype}'")
 
 		if name:
 			# match by full name using SQL-like wildcard (%value%) — do not quote the
 			# wildcard expression per SOLIDserver expectations
-			full = _esc(self._full_name(name))
-			where_parts.append(f"rr_full_name like %" + full + "%")
+			where_parts.append(f"rr_full_name = '" + self._fqdn_name(name) + "'")
+		else:
+			where_parts.append(f"rr_full_name like '%." + self.domain + "'")
 
 		if content:
 			# value1 is the column containing the RR content, match with %%value%%
-			val = _esc(content)
-			where_parts.append(f"value1 like %" + val + "%")
+			where_parts.append(f"value1 = '{content}'")
 
 		# Conditions in WHERE must be combined with AND
 		where = " AND ".join(where_parts)
@@ -176,16 +207,12 @@ class Provider(BaseProvider):
 		}
 
 		endpoint = "/rest/dns_rr_list"
-		payload = self._get(endpoint, params)
+
+		# Fetch raw records from provider
+		raw_records = self._get(endpoint, params)
 
 		# Transform provider response into lexicon canonical record form
 		records = []
-		# EfficientIP may return different structures; try common keys
-		raw_records = []
-		if isinstance(payload, dict):
-			raw_records = payload.get("data") or payload.get("dns_rr") or payload.get("result") or []
-		elif isinstance(payload, list):
-			raw_records = payload
 
 		for record in raw_records:
 			id_val = record.get("rr_id")
@@ -202,23 +229,17 @@ class Provider(BaseProvider):
 			}
 			records.append(processed)
 
-		LOGGER.debug("list_records: %s", records)
 		return records
 
-	def update_record(self, identifier, rtype=None, name=None, content=None):
-		"""Update an existing record. If `identifier` is None, try to
-		resolve it using `list_records` like other providers do."""
-		# EfficientIP does not support editing a RR directly. The recommended
-		# approach is to delete the existing RR(s) and re-create them.
-		# We'll find matching records and remove them, then create the new one.
-		# `content` is the new value to set.
+	def update_record(self, identifier=None, rtype=None, name=None, content=None):
+		"""Update an existing record"""
 		if content is None:
-			raise Exception("No content provided for update")
+			raise Exception("No content provided for update - won't update")
 
 		# Find existing records matching rtype and name
 		existing = self.list_records(rtype, name)
 		if not existing:
-			raise Exception("No records found matching type and name - won't update")
+			raise Exception("No matching records found matching type and name - won't update")
 
 		# If multiple records found, avoid guessing which to replace
 		if len(existing) > 1:
@@ -234,22 +255,30 @@ class Provider(BaseProvider):
 		# `/rest/dns_rr_delete` with URL encoded parameters.
 		params = {
 			"dns_name": self.sds_dns,
+			"rr_type": rtype,
+			"rr_ttl": int(self._get_lexicon_option("ttl") or 300),
+			"rr_name": self._fqdn_name(name),
+			"rr_value1": content,
 		}
+
 		if self.sds_view:
 			params["dns_view_name"] = self.sds_view
-		if rtype:
-			params["rr_type"] = rtype
-		if name:
-			params["rr_name"] = self._full_name(name)
-		if content:
-			params["rr_value1"] = content
 
 		endpoint = "/rest/dns_rr_delete"
-		payload = self._get(endpoint, params)
+		payload = self._delete(endpoint, params)
 		LOGGER.debug("delete_record payload: %s", payload)
 		return True
 
-	# HTTP helpers
+	# Helpers
+	def _fqdn_name(self, record_name):
+			# Sanitize record_name by removing trailing dots
+			record_name = record_name.rstrip(".")
+			# check if the record_name is fully specified
+			if not record_name.endswith(self.domain):
+					record_name = f"{record_name}.{self.domain}"
+			# return the FQDN without trailing dots
+			return f"{record_name}"
+
 	def _request(self, action: str = "GET", url: str = "/", data=None, query_params=None):
 		if query_params is None:
 			query_params = {}
@@ -286,11 +315,11 @@ class Provider(BaseProvider):
 	def _get(self, url, params=None):
 		return self._request("GET", url, None, params)
 
-	def _post(self, url, data=None):
-		return self._request("POST", url, data, None)
+	def _post(self, url, params=None, data=None):
+		return self._request("POST", url, data, params)
 
-	def _put(self, url, data=None):
+	def _put(self, url, params=None, data=None):
 		return self._request("PUT", url, data, None)
 
-	def _delete(self, url):
-		return self._request("DELETE", url, None, None)
+	def _delete(self, url, params=None):
+		return self._request("DELETE", url, None, params)
