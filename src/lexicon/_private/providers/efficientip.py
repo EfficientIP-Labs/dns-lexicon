@@ -151,6 +151,11 @@ class Provider(BaseProvider):
 		Validate record type against supported types; unsupported types
 		are logged and the method returns False to indicate no action.
 		"""
+		# Debug info
+		LOGGER.debug(f"Submited domain: {self.domain}")
+		#UNABLE to retrieve non altered domain name ... # LOGGER.debug(f"orignal domain name: {self.config.resolve("lexicon:domain")}")
+		LOGGER.debug(f"Sanitized name: {self._fqdn_name(name) if name else 'N/A'}")
+
 		# Validate rtype
 		if rtype not in self.SUPPORTED_RRTYPES:
 			LOGGER.error("Unsupported record type '%s' for EfficientIP provider", rtype)
@@ -160,10 +165,6 @@ class Provider(BaseProvider):
 		if not self._validate_content(rtype, content):
 			# _validate_content logs the specific error
 			return False
-
-		LOGGER.debug(f"domain: {self.domain}")
-		#UNABLE to retrieve non altered domain name ... # LOGGER.debug(f"orignal domain name: {self.config.resolve("lexicon:domain")}")
-		LOGGER.debug(f"sanitized name: {self._fqdn_name(name) if name else 'N/A'}")
 
 		# Build query parameters expected by EfficientIP SOLIDserver REST API
 		params = {
@@ -196,9 +197,10 @@ class Provider(BaseProvider):
 		fields: `rr_id, rr_full_name, rr_type, value1, ttl`.
 		"""
 
-		LOGGER.debug(f"domain: {self.domain}")
+		# Debug info
+		LOGGER.debug(f"Submited domain: {self.domain}")
 		#UNABLE to retrieve non altered domain name ... # LOGGER.debug(f"orignal domain name: {self.config.resolve("lexicon:domain")}")
-		LOGGER.debug(f"sanitized name: {self._fqdn_name(name) if name else 'N/A'}")
+		LOGGER.debug(f"Sanitized name: {self._fqdn_name(name) if name else 'N/A'}")
 
 		# Build WHERE filter parts
 		where_parts = []
